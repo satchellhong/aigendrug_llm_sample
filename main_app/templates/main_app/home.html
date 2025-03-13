@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>AI Chat Interface</title>
+    <style>
+      body {
+        font-family: Arial, sans-serif;
+        line-height: 1.6;
+        margin: 0;
+        padding: 0;
+        background-color: #f4f4f4;
+      }
+      .container {
+        width: 80%;
+        margin: auto;
+        overflow: hidden;
+        padding: 20px;
+      }
+      header {
+        background: #50b3a2;
+        color: white;
+        padding-top: 30px;
+        min-height: 70px;
+        border-bottom: #e8491d 3px solid;
+      }
+      header h1 {
+        text-align: center;
+      }
+      #chat-container {
+        background-color: #fff;
+        border: 1px solid #ddd;
+        padding: 15px;
+        margin-top: 20px;
+        height: 400px;
+        overflow-y: auto;
+      }
+      .message {
+        margin-bottom: 10px;
+        padding: 10px;
+        border-radius: 5px;
+      }
+      .user-message {
+        background-color: #e6f3ff;
+        text-align: right;
+      }
+      .ai-message {
+        background-color: #f0f0f0;
+        text-align: left;
+      }
+      .ai-message pre {
+        white-space: pre-wrap;
+        word-wrap: break-word;
+        margin: 0;
+        font-family: "Courier New", Courier, monospace;
+        text-align: left;
+      }
+      .ai-message code {
+        background-color: #1e1e1e;
+        color: #d4d4d4;
+        display: block;
+        padding: 10px;
+        border-radius: 5px;
+        overflow-x: auto;
+      }
+      #input-container {
+        margin-top: 20px;
+      }
+      #targetInput {
+        width: 80%;
+        padding: 10px;
+      }
+      #sendButton {
+        padding: 10px 20px;
+        background-color: #50b3a2;
+        color: white;
+        border: none;
+        cursor: pointer;
+      }
+      #sendButton:disabled {
+        background-color: #cccccc;
+        cursor: not-allowed;
+      }
+      #mode-selector {
+        margin-bottom: 10px;
+      }
+      select {
+        padding: 5px;
+        font-size: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <header>
+      <div class="container">
+        <h1>AI Chat Interface</h1>
+      </div>
+    </header>
+    <div class="container">
+      <div id="chat-container"></div>
+      <div id="input-container">
+        <div id="mode-selector">
+          <label for="modeSelect">Select Mode:</label>
+          <select id="modeSelect">
+            <option value="vector">Vector</option>
+            <option value="answer">Answer</option>
+          </select>
+        </div>
+        <input type="text" id="targetInput" placeholder="Enter your query..." />
+        <button id="sendButton" onclick="sendMessage()">Send</button>
+      </div>
+    </div>
+
+    <script>
+      let socket;
+      const chatContainer = document.getElementById("chat-container");
+      const sendButton = document.getElementById("sendButton");
+      const targetInput = document.getElementById("targetInput");
+      const modeSelect = document.getElementById("modeSelect");
+      let currentResponse = "";
+      let isAIResponding = false;
+      let responseTimer = null;
+      let selectedMode = "vector"; // Default mode
+      let reconnectAttempts = 0;
+      const maxReconnectAttempts = 5;
+      const reconnectDelay = 5000; // 5 seconds
+
+      function setupWebSocket() {
+        socket = new WebSocket("{{ websocket_url }}");
+
+        socket.onopen = function (e) {
+          console.log(e)
+          console.log("Connection established");
+          addMessage("System", "Connected to AI. You can start chatting!");
+          reconnectAttempts = 0;
+        };
+
+        socket.onmessage = function (event) {
+          clearTimeout(responseTimer);
+          currentResponse += event.data;
+          updateLastAIMessage(currentResponse);
+
+          responseTimer = setTimeout(() => {
+            if (isAIResponding) {
+              isAIResponding = false;
+              enableInput();
+            }
+          }, 1000);
+        };
+
+        socket.onclose = function (event) {
+          if (event.wasClean) {
+            console.log(
+              `Connection closed cleanly, code=${event.code} reason=${event.reason}`
+            );
+          } else {
+            console.log("Connection died");
+          }
+          addMessage("System", "Connection lost. Attempting to reconnect...");
+          enableInput();
+          attemptReconnect();
+        };
+
+        socket.onerror = function (error) {
+          console.log(`WebSocket Error: ${error.message}`);
+          addMessage("System", "Error: " + error.message);
+          enableInput();
+        };
+      }
+
+      function attemptReconnect() {
+        if (reconnectAttempts < maxReconnectAttempts) {
+          setTimeout(() => {
+            console.log(
+              `Attempting to reconnect... (Attempt ${reconnectAttempts + 1})`
+            );
+            setupWebSocket();
+            reconnectAttempts++;
+          }, reconnectDelay);
+        } else {
+          addMessage(
+            "System",
+            "Failed to reconnect after multiple attempts. Please refresh the page."
+          );
+        }
+      }
+
+      // Initial setup
+      setupWebSocket();
+
+      // Add event listener for mode selection
+      modeSelect.addEventListener("change", function () {
+        selectedMode = this.value;
+      });
+
+      function sendMessage() {
+        const message = targetInput.value.trim();
+        if (message && !isAIResponding) {
+          addMessage("You", message);
+          const data = {
+            action: "query",
+            data: {
+              question: message,
+              mode: selectedMode,
+            },
+          };
+          socket.send(JSON.stringify(data));
+          currentResponse = "";
+          addMessage("AI", "Thinking...");
+          targetInput.value = "";
+          isAIResponding = true;
+          disableInput();
+        }
+      }
+
+      function addMessage(sender, message) {
+        const messageDiv = document.createElement("div");
+        messageDiv.className = `message ${sender.toLowerCase()}-message`;
+        if (sender === "AI") {
+          const preElement = document.createElement("pre");
+          preElement.innerHTML = `${sender}: ${formatCodeBlocks(message)}`;
+          messageDiv.appendChild(preElement);
+        } else {
+          messageDiv.textContent = `${sender}: ${message}`;
+        }
+        chatContainer.appendChild(messageDiv);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+      }
+
+      function updateLastAIMessage(message) {
+        const aiMessages = chatContainer.getElementsByClassName("ai-message");
+        if (aiMessages.length > 0) {
+          const lastAIMessage = aiMessages[aiMessages.length - 1];
+          const preElement =
+            lastAIMessage.querySelector("pre") || document.createElement("pre");
+          preElement.innerHTML = `AI: ${formatCodeBlocks(message)}`;
+          if (!lastAIMessage.contains(preElement)) {
+            lastAIMessage.innerHTML = "";
+            lastAIMessage.appendChild(preElement);
+          }
+          chatContainer.scrollTop = chatContainer.scrollHeight;
+        }
+      }
+
+      function formatCodeBlocks(text) {
+        return text.replace(
+          /```(\w+)?\n([\s\S]*?)```/g,
+          function (match, language, code) {
+            return `<code>${code.trim()}</code>`;
+          }
+        );
+      }
+
+      function disableInput() {
+        targetInput.disabled = true;
+        sendButton.disabled = true;
+      }
+
+      function enableInput() {
+        targetInput.disabled = false;
+        sendButton.disabled = false;
+        targetInput.focus();
+      }
+
+      targetInput.addEventListener("keypress", function (e) {
+        if (e.key === "Enter" && !isAIResponding) {
+          sendMessage();
+        }
+      });
+    </script>
+  </body>
+</html>
